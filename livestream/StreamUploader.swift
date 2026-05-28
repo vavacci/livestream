@@ -153,6 +153,11 @@ private enum LibRTMPLogThrottler {
     static func onLog(_ cString: UnsafePointer<CChar>?) {
         guard let cString = cString else { return }
         let msg = String(cString: cString)
+        // librtmp 内部已被设为 LOGWARNING 级别，量不大；直接 NSLog 到 Console，
+        // 用于看清服务端为何关闭连接（发包失败/握手错误/被踢等），iOS15 日志黑框失效时尤其需要。
+        if LiveStreamConfig.App.enableRuntimeLogging {
+            NSLog("[Suspect][librtmp] %@", msg)
+        }
         let nowMs = UInt64(Date().timeIntervalSince1970 * 1000)
 
         var toPrint: String?
@@ -627,6 +632,10 @@ private final class LibRTMPSession {
     }
 
     private func handleDisconnect(reason: String) {
+        if LiveStreamConfig.App.enableRuntimeLogging {
+            let connected = bridgeSession.map { LibRTMPSessionIsConnected($0) } ?? false
+            NSLog("[Suspect][Disconnect] %@", "reason=\(reason) failedLabel=\(failedPacketLabel) failedType=\(failedPacketType) failedTs=\(failedPacketTimestamp) bytes=\(failedPacketBytes) sent=\(sentPacketCount) connectedNow=\(connected ? 1 : 0)")
+        }
         destroyBridge(resetTransportState: true, resetTimelineState: false)
         scheduleReconnect(reason: reason)
     }
