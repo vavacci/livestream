@@ -435,6 +435,10 @@ private final class LibRTMPSession {
                     SharedLogger.log("RTMP SPS hex=\(sps.prefixHex(64))")
                     SharedLogger.log("RTMP PPS hex=\(pps.prefixHex(32))")
                     SharedLogger.log("RTMP AVCConfig hex=\(payload.prefixHex(80))")
+                    // 同步 NSLog 到 Console，便于 iOS15/iOS16 字节级对比（SharedLogger 的 print 不进 Console）。
+                    if LiveStreamConfig.App.enableRuntimeLogging {
+                        NSLog("[Suspect][SPS] reason=%@ sps=%@ pps=%@ avc=%@", reason, sps.prefixHex(64), pps.prefixHex(32), payload.prefixHex(80))
+                    }
                 }
             }
         }
