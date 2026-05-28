@@ -81,7 +81,8 @@ final class RTMPUploader: StreamUploader {
                 let groupID = LiveStreamConfig.AppGroup.currentID()
                 let containerOK = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) != nil
                 let fileOverride = LiveStreamConfig.SharedFileStore.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey) != nil
-                let defaultsOverride = (LiveStreamConfig.AppGroup.defaults()?.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines)?.isEmpty == false)
+                let defaultsRaw = LiveStreamConfig.AppGroup.defaults()?.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
+                let defaultsOverride = (defaultsRaw?.isEmpty == false)
                 let resolvedHost = RTMPURL.parse(resolvedURL)?.host ?? "-"
                 NSLog("[Suspect][URLResolve] group=%@ containerOK=%d fileOverride=%d defaultsOverride=%d host=%@", groupID, containerOK ? 1 : 0, fileOverride ? 1 : 0, defaultsOverride ? 1 : 0, resolvedHost)
             }
