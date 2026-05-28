@@ -1,5 +1,6 @@
 import ReplayKit
 import CoreMedia
+import Darwin
 
 private enum LiveStreamDarwinSignal {
     static let started = "com.xxx.livestream.broadcast.started"
@@ -72,6 +73,7 @@ final class BroadcastSampleHandler: RPBroadcastSampleHandler {
         LiveStreamDarwinSignal.post(LiveStreamDarwinSignal.started)
         SharedLogger.clear()
         SharedLogger.log("直播扩展已启动")
+        logMemory("broadcast_started")
         SharedLogger.log("开始注册停止通知")
         
         // 注册 Darwin 级别的系统通知，用于接收无 UI 的后台关闭指令
@@ -108,6 +110,7 @@ final class BroadcastSampleHandler: RPBroadcastSampleHandler {
             defaults?.synchronize()
             LiveStreamDarwinSignal.post(LiveStreamDarwinSignal.pipelineStarted)
             SharedLogger.log("RealtimePipeline 已启动")
+            self.logMemory("pipeline_started")
         }
         startupQueue.asyncAfter(deadline: .now() + 1.0) { [weak self] in
             guard let self, self.isFinishing == false else { return }
@@ -115,6 +118,7 @@ final class BroadcastSampleHandler: RPBroadcastSampleHandler {
             defaults?.set("alive_after_1s", forKey: DebugKey.lastStage)
             defaults?.synchronize()
             SharedLogger.log("扩展启动后 1s 仍存活，pipelineRunning=\(self.isPipelineRunning)")
+            self.logMemory("alive_after_1s")
         }
     }
 
@@ -196,6 +200,12 @@ final class BroadcastSampleHandler: RPBroadcastSampleHandler {
                 defaults?.synchronize()
                 LiveStreamDarwinSignal.post(LiveStreamDarwinSignal.firstVideo)
                 SharedLogger.log("收到首个视频 sample")
+                logMemory("first_video_sample")
+                if let fmt = CMSampleBufferGetFormatDescription(sampleBuffer) {
+                    let dims = CMVideoFormatDescriptionGetDimensions(fmt)
+                    let pixelFmt = CMFormatDescriptionGetMediaSubType(fmt)
+                    SharedLogger.log("首个视频 sample 源尺寸=\(dims.width)x\(dims.height) pixelFmt=\(pixelFmt)")
+                }
             }
             pipeline.handleVideo(sampleBuffer)
         case .audioApp:
@@ -264,6 +274,24 @@ final class BroadcastSampleHandler: RPBroadcastSampleHandler {
     private func requestFinish(_ error: Error?) {
         guard isFinishing == false else { return }
         finishBroadcastWithError(error)
+    }
+
+    private func logMemory(_ stage: String) {
+        // Broadcast Upload Extension 内存上限约 50MB，超限会被系统直接 jetsam 杀掉。
+        // 在关键阶段记录 resident 内存，用于判断 iOS15 是否在启动阶段就被内存压垮。
+        SharedLogger.log("MEM stage=\(stage) resident=\(Self.currentResidentMemoryMB())MB")
+    }
+
+    private static func currentResidentMemoryMB() -> UInt64 {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.stride / MemoryLayout<integer_t>.stride)
+        let result: kern_return_t = withUnsafeMutablePointer(to: &info) { pointer in
+            pointer.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { reboundPointer in
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), reboundPointer, &count)
+            }
+        }
+        guard result == KERN_SUCCESS else { return 0 }
+        return UInt64(info.resident_size) / (1024 * 1024)
     }
 
     private var appGroupID: String {

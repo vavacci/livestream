@@ -413,6 +413,11 @@ private final class LibRTMPSession {
                     videoConfigLogCount += 1
                     let reason = !wasSent ? "first" : (changed ? "changed" : "periodic-keyframe")
                     SharedLogger.log("RTMP VideoSequenceHeader sent reason=\(reason) ts=\(timestamp) sps=\(sps.count) pps=\(pps.count)")
+                    // 码流字节对比：用于直接比对 iOS15 与 iOS16 的 SPS/PPS/AVCDecoderConfigRecord。
+                    // payload 前 5 字节是 FLV 视频头(0x17,0x00,0,0,0)，其余即 AVCDecoderConfigRecord。
+                    SharedLogger.log("RTMP SPS hex=\(sps.prefixHex(64))")
+                    SharedLogger.log("RTMP PPS hex=\(pps.prefixHex(32))")
+                    SharedLogger.log("RTMP AVCConfig hex=\(payload.prefixHex(80))")
                 }
             }
         }
@@ -1061,6 +1066,13 @@ private extension CMTime {
     var debugText: String {
         guard isNumeric else { return "invalid" }
         return String(format: "%.3f", CMTimeGetSeconds(self))
+    }
+}
+
+private extension Data {
+    /// 取前 n 字节的十六进制字符串（诊断用，避免一次性打印整包）。
+    func prefixHex(_ n: Int) -> String {
+        prefix(n).map { String(format: "%02X", $0) }.joined()
     }
 }
 

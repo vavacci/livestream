@@ -120,7 +120,7 @@ enum LiveStreamConfig {
         /// 2. 主界面不展示日志区；
         /// 3. 远端 7777 调试镜像默认关闭；
         /// 4. 代码中的少量 NSLog/print 也会被短路。
-        static let enableRuntimeLogging: Bool = false
+        static let enableRuntimeLogging: Bool = true
 
         /// 是否记录并写入 App Group 的 SharedLogger 日志。
         /// 关闭后：不再写入/同步 UserDefaults，也不再输出到控制台。
@@ -137,7 +137,7 @@ enum LiveStreamConfig {
     enum DebugMirror {
         /// 是否把关键调试日志镜像到 7777 调试端口。
         /// 与 enableLogRecording 解耦，便于只开远端观测而不增加本地 UserDefaults 压力。
-        static let enableRemoteMirror: Bool = App.enableRuntimeLogging
+        static let enableRemoteMirror: Bool = false
         static let endpoint = "http://10.89.114.217:7777/event"
         static let sessionId = "rtmp-audio-debug"
         static let runId = "audio-only-followup"
