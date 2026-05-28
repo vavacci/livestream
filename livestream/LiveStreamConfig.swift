@@ -203,11 +203,8 @@ enum LiveStreamConfig {
         // 占位默认值：真实推流地址请在 App 内或通过 deeplink 写入 App Group（rtmp.url）。
         static let defaultURL = "rtmp://YOUR_RTMP_HOST/live/YOUR_STREAM_KEY"
 //        static let defaultURL = "rtmp://192.168.10.118:1935/live/livestream?token=secret123"
-        // 默认关闭音频推送（仅推视频）。
-        // 诊断结论：iOS16 测试是无音频(a=0)时连接稳定、可拉流；iOS15 带音频(a=43)时 volc CDN 会在收到媒体后
-        // ~0.6s 关闭连接(EPIPE，断连点恒为 failedLabel=audio)。即“带音频就被服务端踢断”。
-        // 先默认视频-only，使 iOS15 与可用的 iOS16 行为一致、确认能拉流；音频链路问题后续单独修复后再开。
-        static let defaultDisableAudioPush = true
+        // 音频默认开启（实测 iOS15 在仅视频时仍被服务端 EPIPE 断开，证明音频不是根因）。
+        static let defaultDisableAudioPush = false
 
         static var resolvedURL: String {
             // 1) App Group 容器文件：iOS15 上 UserDefaults 跨进程不同步，文件方式可靠。

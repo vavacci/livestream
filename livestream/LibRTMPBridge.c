@@ -165,6 +165,14 @@ bool LibRTMPSessionOpen(void *session, void(*logCallback)(const char *)) {
     // Fix: We need to explicitly check m_stream_id in our external logic
     // Just to ensure RTMP_Write has the proper stream_id.
     // If not, RTMP_Write returns 0 immediately due to m_stream_id == 0 check inside it.
+    {
+        // 诊断：打印服务端分配的 message stream id。iOS15 发包日志里出现 stream=4294967295(=-1)，
+        // 这是无效的 RTMP message stream id，会导致服务端拒收媒体并关闭连接。对比 iOS16 取值以确认是否为差异点。
+        char sbuf[96];
+        snprintf(sbuf, sizeof(sbuf), "m_stream_id after ConnectStream = %d (u=%u)",
+                 (int)context->rtmp->m_stream_id, (unsigned)context->rtmp->m_stream_id);
+        if (logCallback) logCallback(sbuf);
+    }
     if (context->rtmp->m_stream_id == 0) {
         if (logCallback) logCallback("Warning: m_stream_id is still 0 after ConnectStream!");
     }
