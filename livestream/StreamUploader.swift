@@ -77,7 +77,7 @@ final class RTMPUploader: StreamUploader {
             // [URLResolve] 关键诊断：确认扩展是否能从 App Group 读到主 App 配置的推流地址。
             // 若 containerOK=0 或 override=0，则说明 App Group 共享在该系统上失效，扩展只能回退到内置默认 URL，
             // 这正是 iOS15“日志黑框为空 + RTMP 永远连不上”的同源根因。
-            do {
+            if LiveStreamConfig.App.enableRuntimeLogging {
                 let groupID = LiveStreamConfig.AppGroup.currentID()
                 let containerOK = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) != nil
                 let fileOverride = LiveStreamConfig.SharedFileStore.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey) != nil
