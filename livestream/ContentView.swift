@@ -365,6 +365,8 @@ struct ContentView: View {
                 defaults.removeObject(forKey: LiveStreamConfig.RTMP.userDefaultsKey)
                 defaults.synchronize()
             }
+            // 同步清除容器文件覆盖值（iOS15 扩展只认文件）。
+            LiveStreamConfig.SharedFileStore.setString(nil, forKey: LiveStreamConfig.RTMP.userDefaultsKey)
             rtmpConfigHint = "已清空覆盖值，将使用默认 URL（下次启动推流生效）。目标组: \(targetGroups)"
         } else {
             for (groupID, defaults) in defaultsList {
@@ -373,6 +375,8 @@ struct ContentView: View {
                 defaults.set(Date().timeIntervalSince1970, forKey: LiveStreamConfig.AppGroup.runtimeSelectedUpdatedAtKey)
                 defaults.synchronize()
             }
+            // 关键：同时写入 App Group 容器文件，保证 iOS15 录屏扩展能跨进程读到推流地址。
+            LiveStreamConfig.SharedFileStore.setString(trimmed, forKey: LiveStreamConfig.RTMP.userDefaultsKey)
             rtmpConfigHint = "已保存 RTMP URL（下次启动推流生效）。目标组: \(targetGroups)"
         }
         rtmpURLInput = trimmed

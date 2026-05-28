@@ -14,6 +14,13 @@ struct livestreamApp: App {
         defaults?.set("", forKey: "recording.lastError")
         defaults?.set(false, forKey: "cmd_stop_recording")
         defaults?.synchronize()
+        // 迁移：把已保存在 UserDefaults 里的推流地址同步进 App Group 容器文件，
+        // 升级后无需重新输入即可让 iOS15 录屏扩展跨进程读到（UserDefaults 在 iOS15 跨进程不同步）。
+        if let saved = defaults?.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines),
+           !saved.isEmpty,
+           LiveStreamConfig.SharedFileStore.string(forKey: LiveStreamConfig.RTMP.userDefaultsKey) == nil {
+            LiveStreamConfig.SharedFileStore.setString(saved, forKey: LiveStreamConfig.RTMP.userDefaultsKey)
+        }
         setupSignalHandler()
     }
 
@@ -87,6 +94,8 @@ struct livestreamApp: App {
             defaults.set(Date().timeIntervalSince1970, forKey: LiveStreamConfig.AppGroup.runtimeSelectedUpdatedAtKey)
             defaults.synchronize()
         }
+        // 关键：同时写入 App Group 容器文件，保证 iOS15 录屏扩展能跨进程读到推流地址。
+        LiveStreamConfig.SharedFileStore.setString(rtmpURL, forKey: LiveStreamConfig.RTMP.userDefaultsKey)
     }
 
     private func setupSignalHandler() {

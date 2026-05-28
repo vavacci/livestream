@@ -114,6 +114,57 @@ enum LiveStreamConfig {
         }
     }
 
+    /// 跨进程共享配置（主 App ←→ 录屏扩展）。
+    /// iOS15 上 `UserDefaults(suiteName:)` 在主 App 与扩展之间不保证跨进程同步（实测扩展读到的 rtmp.url 为空），
+    /// 但 App Group 容器目录本身可用（containerOK=1）。因此这里改用容器内的 JSON 文件做可靠的跨进程传递。
+    enum SharedFileStore {
+        private static let fileName = "runtime_config.json"
+
+        private static func fileURL(forGroup groupID: String) -> URL? {
+            guard let container = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: groupID) else {
+                return nil
+            }
+            return container.appendingPathComponent(fileName)
+        }
+
+        private static func load(fromGroup groupID: String) -> [String: String] {
+            guard let url = fileURL(forGroup: groupID),
+                  let data = try? Data(contentsOf: url),
+                  let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+                return [:]
+            }
+            return obj
+        }
+
+        /// 读取某个 key：遍历所有 entitled 组容器，返回首个非空值。
+        static func string(forKey key: String) -> String? {
+            for groupID in AppGroup.entitledGroupIDs {
+                let value = load(fromGroup: groupID)[key]?.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let value, !value.isEmpty {
+                    return value
+                }
+            }
+            return nil
+        }
+
+        /// 写入某个 key 到所有 entitled 组容器（value 为 nil/空则删除该 key）。
+        static func setString(_ value: String?, forKey key: String) {
+            let sanitized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+            for groupID in AppGroup.entitledGroupIDs {
+                guard let url = fileURL(forGroup: groupID) else { continue }
+                var dict = load(fromGroup: groupID)
+                if let sanitized, !sanitized.isEmpty {
+                    dict[key] = sanitized
+                } else {
+                    dict.removeValue(forKey: key)
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: dict, options: []) {
+                    try? data.write(to: url, options: .atomic)
+                }
+            }
+        }
+    }
+
     enum App {
         /// 是否启用运行时日志。关闭后：
         /// 1. SharedLogger 不再打印控制台/不再写 App Group；
@@ -155,11 +206,17 @@ enum LiveStreamConfig {
         static let defaultDisableAudioPush = false
 
         static var resolvedURL: String {
+            // 1) App Group 容器文件：iOS15 上 UserDefaults 跨进程不同步，文件方式可靠。
+            if let fileURL = LiveStreamConfig.SharedFileStore.string(forKey: userDefaultsKey) {
+                return fileURL
+            }
+            // 2) App Group UserDefaults：iOS16 正常工作，作为兼容回退。
             let defaults = LiveStreamConfig.AppGroup.defaults()
             let overrideURL = defaults?.string(forKey: userDefaultsKey)?.trimmingCharacters(in: .whitespacesAndNewlines)
             if let overrideURL, !overrideURL.isEmpty {
                 return overrideURL
             }
+            // 3) 内置占位默认。
             return defaultURL
         }
 
