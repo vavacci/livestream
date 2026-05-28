@@ -1,0 +1,15 @@
+--- livestream/librtmp/rtmp.c
++++ livestream/librtmp/rtmp.c
+@@ -1189,6 +1189,12 @@
+ 
+ 	  RTMP_ClientPacket(r, &packet);
+ 	  RTMPPacket_Free(&packet);
++
++	  if ((r->Link.protocol & RTMP_FEATURE_WRITE) && r->m_stream_id > 0) {
++	      RTMP_Log(RTMP_LOGERROR, "RTMP_ConnectStream: Publish mode, stream_id created, breaking read loop.");
++	      r->m_bPlaying = TRUE;
++	      break;
++	  }
+ 	}
+     }
+ 

@@ -1,0 +1,9 @@
+@@ -250,7 +250,7 @@
+ 
+     private func scheduleReconnect() {
+-        print("[RTMP] Scheduling reconnect in 1s...")
++        SharedLogger.log("准备 1s 后重连...")
+         reconnectWorkItem?.cancel()
+         let work = DispatchWorkItem { [weak self] in
+             self?.connection?.cancel()
+ 

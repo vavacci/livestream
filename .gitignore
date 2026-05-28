@@ -1,0 +1,23 @@
+# Xcode build output / derived data
+build/
+DerivedData/
+*.xcarchive
+
+# Packaged app artifacts
+*.ipa
+*.tipa
+Payload/
+
+# Code signing material (never commit)
+*.mobileprovision
+*.p12
+*.cer
+*.certSigningRequest
+
+# Xcode user state
+**/xcuserdata/
+*.xcuserstate
+
+# macOS
+.DS_Store
+__MACOSX/
