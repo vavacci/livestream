@@ -114,6 +114,12 @@ final class AACEncoder {
     private var lastEncodeErrorAt: Double = 0
     private var skippedInputLogCount: Int = 0
     private var missingSourceLogCount: Int = 0
+    /// Set true once we have emitted at least one full-size AAC packet. Before this we may
+    /// see encoder warm-up output (≤7 bytes of garbage/header). After it, even tiny output
+    /// is a legitimate silent packet and MUST be emitted, otherwise bufferHeadPTS stalls
+    /// and the player sees a PTS jump when audio resumes (see silence-synthesis fix).
+    private var aacWarmedUp: Bool = false
+    private var aacFilteredSmallCount: Int = 0
 
     private let ringBuffer = FlatPCMBuffer(capacity: 131072)
     private var outputBuffer = UnsafeMutableRawPointer.allocate(byteCount: 8192, alignment: MemoryLayout<UInt8>.alignment)
@@ -132,6 +138,8 @@ final class AACEncoder {
         lastEncodeErrorAt = 0
         skippedInputLogCount = 0
         missingSourceLogCount = 0
+        aacWarmedUp = false
+        aacFilteredSmallCount = 0
         publishDiagnostics()
         SharedLogger.log("AACEncoder 已进入待启动状态")
     }
@@ -153,6 +161,8 @@ final class AACEncoder {
         lastEncodeErrorAt = 0
         skippedInputLogCount = 0
         missingSourceLogCount = 0
+        aacWarmedUp = false
+        aacFilteredSmallCount = 0
         publishDiagnostics()
     }
 
@@ -347,7 +357,7 @@ final class AACEncoder {
 
             if convertStatus != noErr || outputDataSize == 0 || ioOutputDataPackets == 0 {
                 if convertStatus == noErr && outputDataSize <= 7 {
-                    // warm-up
+                    // warm-up — only meaningful BEFORE we have produced any real packet.
                 } else if convertStatus == 104 {
                     break
                 } else {
@@ -357,11 +367,20 @@ final class AACEncoder {
                 }
             }
 
-            if outputDataSize <= 7 && convertStatus == noErr {
+            // Pre-warmup: skip tiny (≤7-byte) packets — encoder priming.
+            // Post-warmup: a tiny packet is a *legitimate silent AAC frame* and must
+            // be emitted; otherwise bufferHeadPTS never advances during silence and
+            // the player sees a multi-second PTS jump on audio resume.
+            if outputDataSize <= 7 && convertStatus == noErr && !aacWarmedUp {
+                aacFilteredSmallCount += 1
+                if aacFilteredSmallCount <= 3 || aacFilteredSmallCount % 200 == 0 {
+                    NSLog("[Suspect][AAC] pre-warmup skip outSize=%d count=%d", Int(outputDataSize), aacFilteredSmallCount)
+                }
                 continue
             }
 
-            if outputDataSize > 7 {
+            if outputDataSize > 0 {
+                if outputDataSize > 7 { aacWarmedUp = true }
                 let pts = nextOutputPTS(sampleRate: sampleRate)
                 let outData = Data(bytes: outputBuffer, count: Int(outputDataSize))
                 recordEncodedFrame()

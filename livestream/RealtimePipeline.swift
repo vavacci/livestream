@@ -556,8 +556,9 @@ private extension RealtimePipeline {
     /// is extracted. Seeds the silence anchor so the ticker knows when audio went idle
     /// and where the next packet should logically start.
     func noteRealAudioArrival(_ extracted: ExtractedAudioSample) {
+        let wasFirst: Bool
         silenceLock.lock()
-        defer { silenceLock.unlock() }
+        wasFirst = (silenceASBD == nil)
         silenceASBD = extracted.asbd
         if extracted.pts.isNumeric, extracted.frameCount > 0 {
             let sr = max(1.0, extracted.asbd.mSampleRate)
@@ -566,6 +567,15 @@ private extension RealtimePipeline {
             silenceNextPTS = extracted.pts + frameDur
         }
         lastRealAudioInputAt = CFAbsoluteTimeGetCurrent()
+        silenceLock.unlock()
+        if wasFirst {
+            let sr = extracted.asbd.mSampleRate
+            let ch = extracted.asbd.mChannelsPerFrame
+            let bpf = extracted.asbd.mBytesPerFrame
+            let flags = extracted.asbd.mFormatFlags
+            NSLog("[Suspect][SilenceAnchor] first real audio sr=%.0f ch=%u bpf=%u flags=0x%x frames=%d ptsNumeric=%d",
+                  sr, ch, bpf, flags, extracted.frameCount, extracted.pts.isNumeric ? 1 : 0)
+        }
     }
 
     func resetSilenceState() {
@@ -664,8 +674,12 @@ private extension RealtimePipeline {
 
         guard emitted > 0 else { return }
 
-        var maybeLog: String? = nil
+        let snapshotLifetimeBefore: Int
+        var emitWindowEnded = false
+        var windowEmitted = 0
+        var lifetimeAfter = 0
         silenceLock.lock()
+        snapshotLifetimeBefore = silenceLifetimeEmitted
         silenceNextPTS = pts
         // Advance lastRealAudioInputAt by what we covered, so subsequent ticks
         // measure gap against the last *covered* moment, not the original silence start.
@@ -674,14 +688,22 @@ private extension RealtimePipeline {
         silenceWindowEmitted += emitted
         if silenceWindowStart == 0 { silenceWindowStart = now }
         if now - silenceWindowStart >= 1.0 {
-            maybeLog = "Silence 1s: emitted=\(silenceWindowEmitted) lifetime=\(silenceLifetimeEmitted) gapMs=\(Int(gapMs))"
+            emitWindowEnded = true
+            windowEmitted = silenceWindowEmitted
+            lifetimeAfter = silenceLifetimeEmitted
             silenceWindowStart = now
             silenceWindowEmitted = 0
         }
         silenceLock.unlock()
 
-        if let logLine = maybeLog {
-            SharedLogger.log(logLine)
+        // Surface the first emission immediately so we can verify the path is alive.
+        if snapshotLifetimeBefore == 0 {
+            NSLog("[Suspect][SilenceFirst] emitted=%d gapMs=%d sr=%.0f packetDurMs=%.2f",
+                  emitted, Int(gapMs), sampleRate, packetDurSec * 1000.0)
+        }
+        if emitWindowEnded {
+            NSLog("[Suspect][Silence] 1s emitted=%d lifetime=%d lastGapMs=%d",
+                  windowEmitted, lifetimeAfter, Int(gapMs))
         }
     }
 }
