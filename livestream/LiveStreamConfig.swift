@@ -171,7 +171,7 @@ enum LiveStreamConfig {
         /// 2. 主界面不展示日志区；
         /// 3. 远端 7777 调试镜像默认关闭；
         /// 4. 代码中的少量 NSLog/print 也会被短路。
-        static let enableRuntimeLogging: Bool = false
+        static let enableRuntimeLogging: Bool = true
 
         /// 是否记录并写入 App Group 的 SharedLogger 日志。
         /// 关闭后：不再写入/同步 UserDefaults，也不再输出到控制台。
