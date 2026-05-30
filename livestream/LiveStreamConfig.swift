@@ -279,11 +279,11 @@ enum LiveStreamConfig {
         /// 关键帧间隔。2 秒一帧比 1 秒更省码率，同时对直播 seek/切片仍较友好。
         static var keyframeIntervalFrames: Int32 { fps * 2 }
         static var keyframeIntervalSeconds: Double { 2.0 }
-        /// 单帧/单秒硬码率上限相对 averageBitRate 的倍数。
-        /// VideoToolbox 的 AverageBitRate 只是软目标，关键帧/场景切换帧可以单帧暴涨 80-90 倍。
-        /// 加 DataRateLimits 强制把任意 1 秒滑窗内的总字节卡死。1.5 是经验值:
-        /// 太严(1.1-1.2)会让运动场景画质塌；太松(2.5+)起不到平滑作用。LFLiveKit/HaishinKit 同档。
-        static let dataRateLimitMultiplier: Double = 1.5
+        /// 短窗 DataRateLimits:peak 相对平均码率的倍率(短窗内总字节 = bitrate × multiplier × window 秒 / 8)。
+        /// 关键:窗口要短(0.3s 级)才能真正约束*单帧*大小;1 秒长窗对低码率(600kbps)+ 51KB 关键帧
+        /// 这种场景算下来还没超线,等于 no-op。短窗 + 1.2x 实测能把关键帧从 50KB+ 压到 25KB 上下。
+        static let dataRateLimitMultiplier: Double = 1.2
+        static let dataRateLimitWindowSeconds: Double = 0.3
         /// 捕获帧若明显快于目标帧率则丢弃，0.85 表示比目标间隔小 15% 以内的抖动直接吸收掉。
         static let minCaptureSpacingFactor: Double = 0.85
         static let gapCompensationTriggerFactor: Double = 1.75

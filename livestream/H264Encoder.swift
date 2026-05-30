@@ -406,12 +406,14 @@ final class H264Encoder {
                              value: profileLevel)
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_AverageBitRate,
                              value: bitrate as CFTypeRef)
-        // 硬码率上限:把任意 1 秒窗口内的总字节卡死,防止关键帧/场景切换帧单帧暴涨堵塞上行管道。
-        // 表达式是 CFArray<[bytes_in_window, window_seconds]>,VideoToolbox 会主动加大量化把超额帧压回来。
-        let dataRateLimitBytesPerSecond = Int(Double(bitrate) * LiveStreamConfig.Video.dataRateLimitMultiplier / 8.0)
+        // 短窗 DataRateLimits:CFArray<[bytes, seconds]>。把任意 W 秒窗口内总字节卡死;
+        // W 短到只装 4-5 帧时,等价于对*单帧*大小上限。VT 会主动加大量化把超额帧压回来。
+        // 1 秒窗口对 600kbps + 51KB 关键帧是 no-op(算不超),必须用 0.3s 这种短窗才能管单帧 spike。
+        let window = LiveStreamConfig.Video.dataRateLimitWindowSeconds
+        let bytesInWindow = Int(Double(bitrate) * LiveStreamConfig.Video.dataRateLimitMultiplier * window / 8.0)
         let dataRateLimits: [CFNumber] = [
-            dataRateLimitBytesPerSecond as CFNumber,
-            1.0 as CFNumber
+            bytesInWindow as CFNumber,
+            window as CFNumber
         ]
         VTSessionSetProperty(session, key: kVTCompressionPropertyKey_DataRateLimits,
                              value: dataRateLimits as CFArray)
