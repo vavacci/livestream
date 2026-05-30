@@ -89,6 +89,26 @@ final class PCMBufferPool {
         lock.unlock()
     }
 
+    // Borrow a slot, fill with zeros, wrap as ExtractedAudioSample. Used by silence filler.
+    func makeZeroedSample(asbd: AudioStreamBasicDescription,
+                          pts: CMTime,
+                          frameCount: Int,
+                          totalBytes: Int) -> ExtractedAudioSample? {
+        guard frameCount > 0, totalBytes > 0 else { return nil }
+        guard let (slotIndex, pointer) = checkout(neededBytes: totalBytes) else {
+            return nil
+        }
+        memset(pointer, 0, totalBytes)
+        let handle = PCMSlotHandle(pool: self,
+                                   slotIndex: slotIndex,
+                                   pointer: pointer,
+                                   byteCount: totalBytes)
+        return ExtractedAudioSample(handle: handle,
+                                    asbd: asbd,
+                                    pts: pts,
+                                    frameCount: frameCount)
+    }
+
     // Extract PCM synchronously on producer thread. Any failure path releases the borrowed slot.
     func extract(from sample: CMSampleBuffer) -> ExtractedAudioSample? {
         guard let formatDesc = CMSampleBufferGetFormatDescription(sample),

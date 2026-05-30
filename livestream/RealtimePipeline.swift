@@ -1,5 +1,6 @@
 import Foundation
 import CoreMedia
+import AudioToolbox
 import Darwin
 
 final class RealtimePipeline {
@@ -16,6 +17,24 @@ final class RealtimePipeline {
     // Reuse PCM slots to avoid per-sample malloc/free on the hot path.
     // slotCount is slightly larger than audioInflightDropThreshold to tolerate short bursts.
     private let audioPCMPool = PCMBufferPool(slotCount: 32, initialSlotCapacity: 16_384)
+    private let silencePCMPool = PCMBufferPool(slotCount: 4, initialSlotCapacity: 8_192)
+
+    // Silence synthesis: when the audio source goes idle, emit zero-PCM packets at
+    // packet cadence so the AAC encoder timeline stays continuous and the player
+    // never sees a PTS jump. See iOS15/16 stutter investigation.
+    private let silenceTimerQueue = DispatchQueue(label: "audio.silence.timer.queue")
+    private let silenceLock = NSLock()
+    private var silenceTimer: DispatchSourceTimer?
+    private var silenceASBD: AudioStreamBasicDescription?
+    private var silenceNextPTS: CMTime?
+    private var lastRealAudioInputAt: CFAbsoluteTime = 0
+    private let silencePacketFrames: Int = 1024
+    private let silenceTickIntervalMs: Int = 40
+    private let silenceGapStartMs: Double = 80
+    private let silenceMaxEmitPerTick: Int = 6
+    private var silenceLifetimeEmitted: Int = 0
+    private var silenceWindowEmitted: Int = 0
+    private var silenceWindowStart: CFAbsoluteTime = 0
 
     private var sawAppAudio: Bool = false
     private var firstSendAudioAt: Double = 0
@@ -58,6 +77,8 @@ final class RealtimePipeline {
         firstSendAudioAt = 0
         sendAudioCount = 0
         resetAudioDiagnostics()
+        resetSilenceState()
+        startSilenceFiller()
         SharedDiagnostics.update([
             "diag.pipeline.firstSendAudioAt": 0,
             "diag.pipeline.sendAudioCount": 0,
@@ -117,6 +138,7 @@ final class RealtimePipeline {
 
     func stop() {
         SharedLogger.log("停止 RealtimePipeline")
+        stopSilenceFiller()
         logAudioDiagnostics(force: true)
         logVideoPerfIfNeeded(trigger: "stop", force: true)
         videoEncoder.stop()
@@ -183,6 +205,7 @@ final class RealtimePipeline {
         }
         noteAppAudioSample(frameCount: extracted.frameCount)
         if extracted.frameCount > 0 { sawAppAudio = true }
+        noteRealAudioArrival(extracted)
 
         enqueueAudioWork(kind: "app") { [weak self] in
             guard let self else { return }
@@ -221,6 +244,11 @@ final class RealtimePipeline {
         }
 
         noteMicAudioSample(frameCount: extracted.frameCount)
+        // Only seed silence anchor from mic if app audio hasn't taken over (mic is the
+        // active feed only while sawAppAudio is false; otherwise the closure below drops it).
+        if !sawAppAudio {
+            noteRealAudioArrival(extracted)
+        }
 
         enqueueAudioWork(kind: "mic") {
             guard self.sawAppAudio == false else { return }
@@ -520,6 +548,141 @@ final class RealtimePipeline {
         }
         guard result == KERN_SUCCESS else { return 0 }
         return UInt64(info.resident_size) / (1024 * 1024)
+    }
+}
+
+private extension RealtimePipeline {
+    /// Called synchronously from the broadcast-handler thread when a real audio sample
+    /// is extracted. Seeds the silence anchor so the ticker knows when audio went idle
+    /// and where the next packet should logically start.
+    func noteRealAudioArrival(_ extracted: ExtractedAudioSample) {
+        silenceLock.lock()
+        defer { silenceLock.unlock() }
+        silenceASBD = extracted.asbd
+        if extracted.pts.isNumeric, extracted.frameCount > 0 {
+            let sr = max(1.0, extracted.asbd.mSampleRate)
+            let timescale = Int32(max(1, Int(sr.rounded())))
+            let frameDur = CMTime(value: Int64(extracted.frameCount), timescale: timescale)
+            silenceNextPTS = extracted.pts + frameDur
+        }
+        lastRealAudioInputAt = CFAbsoluteTimeGetCurrent()
+    }
+
+    func resetSilenceState() {
+        silenceLock.lock()
+        defer { silenceLock.unlock() }
+        silenceASBD = nil
+        silenceNextPTS = nil
+        lastRealAudioInputAt = 0
+        silenceLifetimeEmitted = 0
+        silenceWindowEmitted = 0
+        silenceWindowStart = 0
+    }
+
+    func startSilenceFiller() {
+        stopSilenceFiller()
+        let timer = DispatchSource.makeTimerSource(queue: silenceTimerQueue)
+        timer.schedule(deadline: .now() + .milliseconds(silenceTickIntervalMs),
+                       repeating: .milliseconds(silenceTickIntervalMs),
+                       leeway: .milliseconds(5))
+        timer.setEventHandler { [weak self] in
+            self?.tickSilenceFiller()
+        }
+        timer.resume()
+        silenceTimer = timer
+    }
+
+    func stopSilenceFiller() {
+        silenceTimer?.cancel()
+        silenceTimer = nil
+    }
+
+    func tickSilenceFiller() {
+        if LiveStreamConfig.RTMP.isAudioPushDisabled { return }
+
+        let snapshotASBD: AudioStreamBasicDescription?
+        let snapshotNextPTS: CMTime?
+        let snapshotLastInput: CFAbsoluteTime
+        silenceLock.lock()
+        snapshotASBD = silenceASBD
+        snapshotNextPTS = silenceNextPTS
+        snapshotLastInput = lastRealAudioInputAt
+        silenceLock.unlock()
+
+        guard let asbd = snapshotASBD,
+              let firstNextPTS = snapshotNextPTS,
+              snapshotLastInput > 0 else {
+            return
+        }
+
+        let now = CFAbsoluteTimeGetCurrent()
+        let gapSec = now - snapshotLastInput
+        let gapMs = gapSec * 1000.0
+        guard gapMs >= silenceGapStartMs else { return }
+
+        let sampleRate = max(1.0, asbd.mSampleRate)
+        let packetDurSec = Double(silencePacketFrames) / sampleRate
+        guard packetDurSec > 0 else { return }
+        let packetsToCover = Int(gapSec / packetDurSec)
+        guard packetsToCover > 0 else { return }
+        let toEmit = min(packetsToCover, silenceMaxEmitPerTick)
+
+        let timescale = Int32(max(1, Int(sampleRate.rounded())))
+        let frameDur = CMTime(value: Int64(silencePacketFrames), timescale: timescale)
+
+        let channels = max(1, Int(asbd.mChannelsPerFrame))
+        let bytesPerFrame = Int(asbd.mBytesPerFrame)
+        let isNonInterleaved = (asbd.mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0
+        let bytesPerSample: Int
+        if isNonInterleaved {
+            bytesPerSample = bytesPerFrame
+        } else if channels > 0 {
+            bytesPerSample = max(1, bytesPerFrame / channels)
+        } else {
+            bytesPerSample = bytesPerFrame
+        }
+        let totalBytes = silencePacketFrames * channels * bytesPerSample
+        guard totalBytes > 0 else { return }
+
+        var pts = firstNextPTS
+        var emitted = 0
+        for _ in 0..<toEmit {
+            guard let silenceSample = silencePCMPool.makeZeroedSample(asbd: asbd,
+                                                                     pts: pts,
+                                                                     frameCount: silencePacketFrames,
+                                                                     totalBytes: totalBytes) else {
+                break
+            }
+            audioQueue.async { [weak self] in
+                guard let self = self else { return }
+                if LiveStreamConfig.RTMP.isAudioPushDisabled { return }
+                self.audioEncoder.encodeExtracted(silenceSample)
+            }
+            pts = pts + frameDur
+            emitted += 1
+        }
+
+        guard emitted > 0 else { return }
+
+        var maybeLog: String? = nil
+        silenceLock.lock()
+        silenceNextPTS = pts
+        // Advance lastRealAudioInputAt by what we covered, so subsequent ticks
+        // measure gap against the last *covered* moment, not the original silence start.
+        lastRealAudioInputAt = snapshotLastInput + (Double(emitted) * packetDurSec)
+        silenceLifetimeEmitted += emitted
+        silenceWindowEmitted += emitted
+        if silenceWindowStart == 0 { silenceWindowStart = now }
+        if now - silenceWindowStart >= 1.0 {
+            maybeLog = "Silence 1s: emitted=\(silenceWindowEmitted) lifetime=\(silenceLifetimeEmitted) gapMs=\(Int(gapMs))"
+            silenceWindowStart = now
+            silenceWindowEmitted = 0
+        }
+        silenceLock.unlock()
+
+        if let logLine = maybeLog {
+            SharedLogger.log(logLine)
+        }
     }
 }
 
